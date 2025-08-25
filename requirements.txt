@@ -1,0 +1,8 @@
+streamlit
+simpy
+pandas
+matplotlib
+graphviz         # Python interface to Graphviz
+numpy
+openpyxl         # enables pandas.read_excel() for .xlsx files
+xlsxwriter       # used by pandas.to_excel() for writing .xlsx files
