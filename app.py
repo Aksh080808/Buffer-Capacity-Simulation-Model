@@ -1072,10 +1072,16 @@ class FactorySimulation:
             yield self.env.timeout(1)
 
     def run(self):
+        # Start workers only for equipment that are associated with resources (i.e., non-queue equipment)
         for group in self.station_groups:
             for eq in self.station_groups[group]:
+                # Skip spawning a worker for queue placeholder equipment that has no resource
+                if eq not in self.resources:
+                    continue
                 self.env.process(self.equipment_worker(eq))
+        # Start feeder process
         self.env.process(self.feeder())
+        # Yield zero time to start immediately
         yield self.env.timeout(0)
 
 # ========== Summary Display ==========
