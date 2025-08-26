@@ -16,7 +16,7 @@ SAVE_DIR = "simulations"
 USERNAME = "aksh.fii"
 PASSWORD = "foxy123"
 os.makedirs(SAVE_DIR, exist_ok=True)
-st.set_page_config(page_title="Production Line Simulator", layout="wide")
+st.set_page_config(page_title="Buffer Capacity Simulation Model", layout="wide")
 
 # ========== Session State Setup ==========
 for key in ["authenticated", "page", "simulation_data", "group_names", "connections", "from_stations"]:
