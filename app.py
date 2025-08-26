@@ -422,7 +422,12 @@ def new_simulation():
                 # Prepare results for display
                 res_rows = []
                 for res in results:
-                    row = {"Capacity": res["capacity"], "Throughput": res["throughput"]}
+                    # Include serial number for easy reference
+                    row = {
+                        "Serial Number": res.get("serial"),
+                        "Capacity": res["capacity"],
+                        "Throughput": res["throughput"]
+                    }
                     for g, w in res["wip_metrics"].items():
                         row[f"Max WIP at {g}"] = w
                     res_rows.append(row)
@@ -430,14 +435,26 @@ def new_simulation():
                     df_res = pd.DataFrame(res_rows)
                     st.dataframe(df_res)
                     # Plot throughput vs capacity
+                    # Use serial numbers for x-axis for easier reference
                     fig_cap, ax_cap = plt.subplots(figsize=(8, 4))
-                    capacities_plot = [r["capacity"] for r in results]
+                    serials_plot = [r["serial"] for r in results]
                     throughput_plot = [r["throughput"] for r in results]
-                    ax_cap.plot(capacities_plot, throughput_plot, marker='o')
+                    ax_cap.plot(serials_plot, throughput_plot, marker='o')
                     ax_cap.set_title(f"Throughput vs Capacity for {sg_name}")
-                    ax_cap.set_xlabel("Buffer Capacity")
+                    ax_cap.set_xlabel("Serial Number (see table)")
                     ax_cap.set_ylabel("Boards Out at Final Station")
                     ax_cap.grid(True, linestyle='--', alpha=0.6)
+                    # Optionally annotate capacity values above points
+                    for idx, res in enumerate(results):
+                        ax_cap.annotate(
+                            f"Cap {res['capacity']}",
+                            (serials_plot[idx], throughput_plot[idx]),
+                            textcoords="offset points",
+                            xytext=(0, 5),
+                            ha='center',
+                            fontsize=8,
+                            rotation=0
+                        )
                     st.pyplot(fig_cap)
             else:
                 # Multiple queue groups: run DOE across combinations
@@ -454,9 +471,10 @@ def new_simulation():
                 # Display results
                 res_rows = []
                 for res in results:
-                    row = {"Throughput": res["throughput"]}
-                    for g, cap in res["capacities"].items():
-                        row[f"Capacity {g}"] = cap
+                    # Include serial number for easy reference
+                    row = {"Serial Number": res.get("serial"), "Throughput": res["throughput"]}
+                    for g, cap_val in res["capacities"].items():
+                        row[f"Capacity {g}"] = cap_val
                     for g, w in res["wip_metrics"].items():
                         row[f"Max WIP at {g}"] = w
                     res_rows.append(row)
@@ -465,13 +483,24 @@ def new_simulation():
                     st.dataframe(df_res)
                     # Plotting multiple dimensions is complex; display throughput for combinations in a bar chart
                     fig_combos, ax_combos = plt.subplots(figsize=(10, 5))
-                    combo_labels = [" | ".join([f"{g}={cap}" for g, cap in res["capacities"].items()]) for res in results]
+                    # Use serial numbers on x-axis for easier reference
+                    serials_combo = [res["serial"] for res in results]
                     throughput_vals = [res["throughput"] for res in results]
-                    ax_combos.bar(combo_labels, throughput_vals)
+                    ax_combos.bar(serials_combo, throughput_vals)
                     ax_combos.set_title("Throughput for Capacity Combinations")
-                    ax_combos.set_xlabel("Capacity Combination")
+                    ax_combos.set_xlabel("Serial Number (see table)")
                     ax_combos.set_ylabel("Boards Out at Final Station")
-                    ax_combos.tick_params(axis='x', rotation=45)
+                    # Annotate bars with combination labels
+                    combo_labels = [" | ".join([f"{g}={cap}" for g, cap in res["capacities"].items()]) for res in results]
+                    for idx, rect in enumerate(ax_combos.patches):
+                        ax_combos.annotate(
+                            combo_labels[idx],
+                            (rect.get_x() + rect.get_width() / 2, rect.get_height()),
+                            ha='center',
+                            va='bottom',
+                            fontsize=8,
+                            rotation=0
+                        )
                     st.pyplot(fig_combos)
 
 def open_simulation():
@@ -751,7 +780,7 @@ def run_buffer_capacity_analysis(station_groups_data, connections_list, from_sta
     group_names = [g["group_name"] for g in station_groups_data]
     special_groups = [g for g in group_names if ("STACKER" in g.upper()) or ("WIP CART" in g.upper()) or ("WIPCART" in g.upper())]
     final_group = group_names[-1] if group_names else None
-    for cap in capacities:
+    for idx, cap in enumerate(capacities, start=1):
         # Build buffer capacities dict: assign cap to special groups, None to others
         buffer_caps = {g: cap for g in special_groups}
         # Run simulation with this capacity
@@ -779,6 +808,7 @@ def run_buffer_capacity_analysis(station_groups_data, connections_list, from_sta
             else:
                 wip_metrics[g] = 0
         results.append({
+            "serial": idx,
             "capacity": cap,
             "throughput": throughput_final,
             "wip_metrics": wip_metrics,
@@ -806,6 +836,7 @@ def run_buffer_capacity_analysis_multi(station_groups_data, connections_list, fr
     combinations = list(itertools.product(*ranges))
     results = []
     final_group = station_groups_data[-1]["group_name"] if station_groups_data else None
+    serial_counter = 1
     for combo in combinations:
         buffer_caps = {}
         for i, g in enumerate(special_groups):
@@ -832,10 +863,12 @@ def run_buffer_capacity_analysis_multi(station_groups_data, connections_list, fr
             wip_series = sim.wip_over_time.get(g, [])
             wip_metrics[g] = max(wip_series) if wip_series else 0
         results.append({
+            "serial": serial_counter,
             "capacities": buffer_caps.copy(),
             "throughput": throughput_final,
             "wip_metrics": wip_metrics,
         })
+        serial_counter += 1
     return results
 
 # ========== Simulation Class ==========
@@ -1137,16 +1170,28 @@ def show_detailed_summary(sim, valid_groups, from_stations, duration):
         bottleneck_group = None
         for group in groups:
             out = agg[group]['out']
+            # Skip queue groups when identifying bottlenecks
+            is_queue = ("STACKER" in group.upper()) or ("WIP CART" in group.upper()) or ("WIPCART" in group.upper())
+            if is_queue:
+                continue
             if out < min_out:
                 min_out = out
                 bottleneck_group = group
 
         if bottleneck_group:
             eqs = valid_groups[bottleneck_group]
-            avg_ct = sum(sim.cycle_times[eq] for eq in eqs) / len(eqs)
+            # Calculate average cycle time using safe lookup to avoid missing keys
+            if eqs:
+                avg_ct = sum(sim.cycle_times.get(eq, 0.0) for eq in eqs) / len(eqs)
+            else:
+                avg_ct = 0.0
             base_out = agg[groups[-1]]['out']
             eq_count = len(eqs)
-            new_out_bottleneck = (agg[bottleneck_group]['out'] / eq_count) * (eq_count + 1)
+            # Avoid division by zero
+            if eq_count > 0:
+                new_out_bottleneck = (agg[bottleneck_group]['out'] / eq_count) * (eq_count + 1)
+            else:
+                new_out_bottleneck = agg[bottleneck_group]['out']
             estimated_final_out = base_out + (new_out_bottleneck - agg[bottleneck_group]['out']) * 0.7
 
             delta_b = round(new_out_bottleneck - agg[bottleneck_group]['out'])
