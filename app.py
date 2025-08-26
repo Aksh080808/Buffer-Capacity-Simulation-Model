@@ -16,7 +16,7 @@ SAVE_DIR = "simulations"
 USERNAME = "aksh.fii"
 PASSWORD = "foxy123"
 os.makedirs(SAVE_DIR, exist_ok=True)
-st.set_page_config(page_title="Production Line Simulator", layout="wide")
+st.set_page_config(page_title="Buffer Capacity Simulation Model", layout="wide")
 
 # ========== Session State Setup ==========
 for key in ["authenticated", "page", "simulation_data", "group_names", "connections", "from_stations"]:
@@ -58,7 +58,7 @@ def determine_lockout_zones(group_names):
 # ========== Pages ==========
 
 def login_page():
-    st.title("🛠️ Production Line Simulation App (Discrete Event Simulation)")
+    st.title("🛠️ Buffer Capacity Simulation Model (Discrete Event Simulation)")
     st.subheader("🔐 Login")
     user = st.text_input("User ID")
     pwd = st.text_input("Password", type="password")
@@ -71,7 +71,7 @@ def login_page():
             st.error("Invalid credentials")
 
 def main_page():
-    st.title("🛠️ Production Line Simulation App (Discrete Event Simulation)")
+    st.title("🛠️ Buffer Capacity Simulation Model (Discrete Event Simulation)")
     st.subheader("📊 Simulation Portal")
     st.write("Choose an option:")
     col1, col2 = st.columns(2)
@@ -81,7 +81,7 @@ def main_page():
         st.session_state.page = "open"
 
 def new_simulation():
-    st.title("🛠️ Production Line Simulation App (Discrete Event Simulation)")
+    st.title("🛠️ Buffer Capacity Simulation Model (Discrete Event Simulation)")
     st.subheader("➕ New Simulation Setup")
 
     col1, col2 = st.columns(2)
@@ -475,7 +475,7 @@ def new_simulation():
                     st.pyplot(fig_combos)
 
 def open_simulation():
-    st.title("🛠️ Production Line Simulation App (Discrete Event Simulation)")
+    st.title("🛠️ Buffer Capacity Simulation Model (Discrete Event Simulation)")
     st.subheader("📂 Open Simulation")
 
     col1, col2 = st.columns(2)
@@ -513,7 +513,7 @@ def open_simulation():
         st.session_state.page = "edit"
 
 def edit_simulation():
-    st.title("🛠️ Production Line Simulation App (Discrete Event Simulation)")
+    st.title("🛠️ Buffer Capacity Simulation Model (Discrete Event Simulation)")
     sim_name = st.session_state.simulation_data.get("simulation_name", "Unnamed")
     st.subheader(f"✏️ Edit & Rerun Simulation: {sim_name}")
 
