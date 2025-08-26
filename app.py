@@ -16,7 +16,7 @@ SAVE_DIR = "simulations"
 USERNAME = "aksh.fii"
 PASSWORD = "foxy123"
 os.makedirs(SAVE_DIR, exist_ok=True)
-st.set_page_config(page_title="Buffer Capacity Simulation Model", layout="wide")
+st.set_page_config(page_title="Production Line Simulator", layout="wide")
 
 # ========== Session State Setup ==========
 for key in ["authenticated", "page", "simulation_data", "group_names", "connections", "from_stations"]:
@@ -58,7 +58,7 @@ def determine_lockout_zones(group_names):
 # ========== Pages ==========
 
 def login_page():
-    st.title("🛠️ Buffer Capacity Simulation Model (Discrete Event Simulation)")
+    st.title("🛠️ Production Line Simulation App (Discrete Event Simulation)")
     st.subheader("🔐 Login")
     user = st.text_input("User ID")
     pwd = st.text_input("Password", type="password")
@@ -71,7 +71,7 @@ def login_page():
             st.error("Invalid credentials")
 
 def main_page():
-    st.title("🛠️ Buffer Capacity Simulation Model (Discrete Event Simulation)")
+    st.title("🛠️ Production Line Simulation App (Discrete Event Simulation)")
     st.subheader("📊 Simulation Portal")
     st.write("Choose an option:")
     col1, col2 = st.columns(2)
@@ -81,7 +81,7 @@ def main_page():
         st.session_state.page = "open"
 
 def new_simulation():
-    st.title("🛠️ Buffer Capacity Simulation Model (Discrete Event Simulation)")
+    st.title("🛠️ Production Line Simulation App (Discrete Event Simulation)")
     st.subheader("➕ New Simulation Setup")
 
     col1, col2 = st.columns(2)
@@ -109,9 +109,11 @@ def new_simulation():
                 df = pd.read_excel(uploaded_file)
                 df.columns = df.columns.str.lower()
 
-                required_columns = {"serial number", "stations", "number of equipment", "cycle time"}
+                # Only require serial number and station columns for upload.
+                # The number of equipment and cycle time columns are optional and only used for processor groups.
+                required_columns = {"serial number", "stations"}
                 if not required_columns.issubset(df.columns):
-                    st.error("Missing one or more required columns: serial number, stations, number of equipment, cycle time")
+                    st.error("Missing one or more required columns: serial number and stations")
                     return
 
                 # Clear previous manual inputs
@@ -125,17 +127,37 @@ def new_simulation():
                 # Parse stations from the sheet
                 for _, row in df.iterrows():
                     station = str(row['stations']).strip().upper()
-                    num_eq = int(row['number of equipment'])
-                    cycle_times = [float(ct.strip()) for ct in str(row['cycle time']).split(',')]
-
-                    if len(cycle_times) != num_eq:
-                        st.warning(f"Station {station}: Number of equipment and cycle time count mismatch.")
-                        continue
-
-                    valid_groups[station] = {
-                        f"{station}_EQ{i+1}": cycle_times[i] for i in range(num_eq)
-                    }
-                    group_names.append(station)
+                    name_upper = station.upper()
+                    # Identify if station is a special queue
+                    if ("STACKER" in name_upper) or ("WIP CART" in name_upper) or ("WIPCART" in name_upper):
+                        # Treat as queue: ignore number of equipment and cycle time
+                        valid_groups[station] = {f"{station}_QUEUE": 0.0}
+                        group_names.append(station)
+                    else:
+                        # Read number of equipment and cycle times. If missing, treat as 1 equipment with cycle time 0.
+                        try:
+                            num_eq = int(row.get('number of equipment', 1))
+                        except Exception:
+                            num_eq = 1
+                        ct_raw = row.get('cycle time', None)
+                        if pd.isna(ct_raw) or ct_raw is None:
+                            # Default cycle time 0 for unspecified processor groups
+                            cycle_times = [0.0 for _ in range(num_eq)]
+                        else:
+                            try:
+                                cycle_times = [float(ct.strip()) for ct in str(ct_raw).split(',')]
+                            except Exception:
+                                cycle_times = [0.0 for _ in range(num_eq)]
+                        # Adjust cycle times list length
+                        if len(cycle_times) < num_eq:
+                            # pad with zeros
+                            cycle_times += [0.0] * (num_eq - len(cycle_times))
+                        elif len(cycle_times) > num_eq:
+                            cycle_times = cycle_times[:num_eq]
+                        valid_groups[station] = {
+                            f"{station}_EQ{i+1}": cycle_times[i] for i in range(num_eq)
+                        }
+                        group_names.append(station)
 
                     # Gather reliability information if columns exist
                     # Lowercase column names ensure matching
@@ -194,12 +216,19 @@ def new_simulation():
             with st.expander(f"Station Group {i + 1}"):
                 group_name = st.text_input(f"Group Name {i + 1}", key=f"group_name_{i}").strip().upper()
                 if group_name:
-                    num_eq = st.number_input(f"Number of Equipment in {group_name}", min_value=1, step=1, key=f"eq_count_{i}")
-                    eq_dict = {}
-                    for j in range(num_eq):
-                        eq_name = f"{group_name}_EQ{j+1}"
-                        cycle_time = st.number_input(f"Cycle Time for {eq_name} (sec)", min_value=0.1, key=f"ct_{i}_{j}")
-                        eq_dict[eq_name] = cycle_time
+                    # Check if this group is a special queue (Stacker or WIP Cart)
+                    name_upper = group_name.upper()
+                    if ("STACKER" in name_upper) or ("WIP CART" in name_upper) or ("WIPCART" in name_upper):
+                        # Do not ask for equipment or cycle time; treat as queue with a placeholder equipment
+                        eq_dict = {f"{group_name}_QUEUE": 0.0}
+                        st.info(f"{group_name} is treated as a queue (Stacker/WIP Cart). Equipment and cycle time inputs are ignored.")
+                    else:
+                        num_eq = st.number_input(f"Number of Equipment in {group_name}", min_value=1, step=1, key=f"eq_count_{i}")
+                        eq_dict = {}
+                        for j in range(num_eq):
+                            eq_name = f"{group_name}_EQ{j+1}"
+                            cycle_time = st.number_input(f"Cycle Time for {eq_name} (sec)", min_value=0.1, key=f"ct_{i}_{j}")
+                            eq_dict[eq_name] = cycle_time
                     valid_groups[group_name] = eq_dict
                     group_names.append(group_name)
                 else:
@@ -350,22 +379,36 @@ def new_simulation():
 
     # Buffer capacity analysis section
     st.header("Buffer Capacity Analysis (Optional)")
-    st.markdown("Define a range of capacities to test for all stacker/WIP cart stations. The simulator will run multiple iterations and show throughput vs capacity.")
-    col_cap1, col_cap2, col_cap3 = st.columns(3)
-    min_cap = int(col_cap1.number_input("Min Capacity", min_value=1, value=1, step=1))
-    max_cap = int(col_cap2.number_input("Max Capacity", min_value=1, value=5, step=1))
-    step_cap = int(col_cap3.number_input("Step", min_value=1, value=1, step=1))
+    st.markdown("Define capacity ranges for each Stacker/WIP Cart. The simulator will run experiments for all combinations and show throughput and WIP.")
+    # Identify special queue groups
+    special_groups = [g for g in valid_groups if ("STACKER" in g.upper()) or ("WIP CART" in g.upper()) or ("WIPCART" in g.upper())]
+    capacity_inputs = {}
+    if special_groups:
+        for sg in special_groups:
+            with st.expander(f"Capacity Range for {sg}"):
+                min_cap = int(st.number_input(f"Min Capacity for {sg}", min_value=1, value=1, step=1, key=f"min_{sg}"))
+                max_cap = int(st.number_input(f"Max Capacity for {sg}", min_value=1, value=5, step=1, key=f"max_{sg}"))
+                step_cap = int(st.number_input(f"Step for {sg}", min_value=1, value=1, step=1, key=f"step_{sg}"))
+                capacity_inputs[sg] = (min_cap, max_cap, step_cap)
+    else:
+        st.info("No Stacker or WIP Cart stations identified in this setup.")
     if st.button("🔍 Analyze Buffer Capacities"):
-        # Build list of capacities
-        if min_cap > max_cap:
-            st.error("Min Capacity must be <= Max Capacity")
+        if not capacity_inputs:
+            st.error("No capacity ranges defined.")
         else:
-            capacities = list(range(min_cap, max_cap + 1, step_cap))
-            if not capacities:
-                st.error("No capacities generated for analysis.")
-            else:
-                st.info(f"Running buffer capacity analysis for capacities: {capacities}")
-                station_groups_data = [{"group_name": g, "equipment": valid_groups[g]} for g in valid_groups]
+            # Build capacity_ranges dict for each special group
+            capacity_ranges = {}
+            for sg, (mn, mx, stp) in capacity_inputs.items():
+                if mn > mx:
+                    st.error(f"Min capacity greater than max for {sg}")
+                    return
+                capacity_ranges[sg] = (mn, mx, stp)
+            station_groups_data = [{"group_name": g, "equipment": valid_groups[g]} for g in valid_groups]
+            if len(capacity_ranges) == 1:
+                # Single queue group: use simple analysis
+                sg_name = list(capacity_ranges.keys())[0]
+                mn, mx, stp = capacity_ranges[sg_name]
+                capacities = list(range(mn, mx + 1, stp))
                 results = run_buffer_capacity_analysis(
                     station_groups_data,
                     [(src, dst) for src, tos in st.session_state.connections.items() for dst in tos],
@@ -376,11 +419,10 @@ def new_simulation():
                     equipment_params=equipment_params,
                     capacities=capacities
                 )
-                # Display results in a table
+                # Prepare results for display
                 res_rows = []
                 for res in results:
                     row = {"Capacity": res["capacity"], "Throughput": res["throughput"]}
-                    # Add WIP metrics per special group
                     for g, w in res["wip_metrics"].items():
                         row[f"Max WIP at {g}"] = w
                     res_rows.append(row)
@@ -392,11 +434,45 @@ def new_simulation():
                     capacities_plot = [r["capacity"] for r in results]
                     throughput_plot = [r["throughput"] for r in results]
                     ax_cap.plot(capacities_plot, throughput_plot, marker='o')
-                    ax_cap.set_title("Throughput vs Buffer Capacity")
+                    ax_cap.set_title(f"Throughput vs Capacity for {sg_name}")
                     ax_cap.set_xlabel("Buffer Capacity")
                     ax_cap.set_ylabel("Boards Out at Final Station")
                     ax_cap.grid(True, linestyle='--', alpha=0.6)
                     st.pyplot(fig_cap)
+            else:
+                # Multiple queue groups: run DOE across combinations
+                results = run_buffer_capacity_analysis_multi(
+                    station_groups_data,
+                    [(src, dst) for src, tos in st.session_state.connections.items() for dst in tos],
+                    st.session_state.from_stations,
+                    duration,
+                    lockout_zones=lockout_zones,
+                    zone_params=zone_params,
+                    equipment_params=equipment_params,
+                    capacity_ranges=capacity_ranges
+                )
+                # Display results
+                res_rows = []
+                for res in results:
+                    row = {"Throughput": res["throughput"]}
+                    for g, cap in res["capacities"].items():
+                        row[f"Capacity {g}"] = cap
+                    for g, w in res["wip_metrics"].items():
+                        row[f"Max WIP at {g}"] = w
+                    res_rows.append(row)
+                if res_rows:
+                    df_res = pd.DataFrame(res_rows)
+                    st.dataframe(df_res)
+                    # Plotting multiple dimensions is complex; display throughput for combinations in a bar chart
+                    fig_combos, ax_combos = plt.subplots(figsize=(10, 5))
+                    combo_labels = [" | ".join([f"{g}={cap}" for g, cap in res["capacities"].items()]) for res in results]
+                    throughput_vals = [res["throughput"] for res in results]
+                    ax_combos.bar(combo_labels, throughput_vals)
+                    ax_combos.set_title("Throughput for Capacity Combinations")
+                    ax_combos.set_xlabel("Capacity Combination")
+                    ax_combos.set_ylabel("Boards Out at Final Station")
+                    ax_combos.tick_params(axis='x', rotation=45)
+                    st.pyplot(fig_combos)
 
 def open_simulation():
     st.title("🛠️ Production Line Simulation App (Discrete Event Simulation)")
@@ -709,6 +785,59 @@ def run_buffer_capacity_analysis(station_groups_data, connections_list, from_sta
         })
     return results
 
+# Extended DOE analysis: test multiple capacities per queue group using a full factorial design
+def run_buffer_capacity_analysis_multi(station_groups_data, connections_list, from_stations_dict, duration,
+                                       lockout_zones, zone_params, equipment_params, capacity_ranges):
+    """
+    Run simulations for all combinations of specified capacities for each special queue group.
+    capacity_ranges: dict of group_name -> (min, max, step) defining the capacity range to test.
+    Returns a list of dicts with capacity assignments and performance metrics.
+    """
+    import itertools
+    # Identify special groups from capacity_ranges keys
+    special_groups = list(capacity_ranges.keys())
+    # Generate list of capacity values for each group
+    ranges = []
+    for g in special_groups:
+        min_c, max_c, step_c = capacity_ranges[g]
+        vals = list(range(int(min_c), int(max_c) + 1, int(step_c)))
+        ranges.append(vals)
+    # Generate all combinations
+    combinations = list(itertools.product(*ranges))
+    results = []
+    final_group = station_groups_data[-1]["group_name"] if station_groups_data else None
+    for combo in combinations:
+        buffer_caps = {}
+        for i, g in enumerate(special_groups):
+            buffer_caps[g] = combo[i]
+        # Run simulation with these capacities
+        sim = run_simulation_backend(
+            station_groups_data,
+            connections_list,
+            from_stations_dict,
+            duration,
+            lockout_zones=lockout_zones,
+            zone_params=zone_params,
+            equipment_params=equipment_params,
+            buffer_capacities=buffer_caps
+        )
+        # Compute throughput at final group
+        throughput_final = 0
+        if final_group:
+            for eq in station_groups_data[-1]["equipment"].keys():
+                throughput_final += sim.throughput_out.get(eq, 0)
+        # Compute max WIP for each special group
+        wip_metrics = {}
+        for g in special_groups:
+            wip_series = sim.wip_over_time.get(g, [])
+            wip_metrics[g] = max(wip_series) if wip_series else 0
+        results.append({
+            "capacities": buffer_caps.copy(),
+            "throughput": throughput_final,
+            "wip_metrics": wip_metrics,
+        })
+    return results
+
 # ========== Simulation Class ==========
 
 class FactorySimulation:
@@ -729,13 +858,24 @@ class FactorySimulation:
         # Initialize buffers with specified capacity or unlimited for all groups (special and normal)
         self.buffers = {}
         for group in station_groups:
+            # Determine capacity specified by user
             cap = None
             if group in self.buffer_capacities:
                 cap = self.buffer_capacities[group]
-            if cap is None or cap <= 0:
-                self.buffers[group] = simpy.Store(env)
+            if group in self.special_groups:
+                # Special groups act as queues; if no capacity specified, assume unlimited queue
+                if cap is None or cap <= 0:
+                    self.buffers[group] = simpy.Store(env)
+                else:
+                    self.buffers[group] = simpy.Store(env, capacity=int(cap))
             else:
-                self.buffers[group] = simpy.Store(env, capacity=int(cap))
+                # Processor groups: default capacity equal to number of equipment (no extra intermediate WIP)
+                if cap is None or cap <= 0:
+                    default_cap = max(len(station_groups[group]), 1)
+                    self.buffers[group] = simpy.Store(env, capacity=int(default_cap))
+                else:
+                    # Use specified capacity
+                    self.buffers[group] = simpy.Store(env, capacity=int(cap))
         # Create resources and mappings only for equipment belonging to non-special groups
         self.resources = {}
         self.cycle_times = {}
