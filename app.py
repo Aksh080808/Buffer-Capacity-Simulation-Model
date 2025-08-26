@@ -16,7 +16,7 @@ SAVE_DIR = "simulations"
 USERNAME = "aksh.fii"
 PASSWORD = "foxy123"
 os.makedirs(SAVE_DIR, exist_ok=True)
-st.set_page_config(page_title="Buffer Capacity Simulation Model", layout="wide")
+st.set_page_config(page_title="Production Line Simulator", layout="wide")
 
 # ========== Session State Setup ==========
 for key in ["authenticated", "page", "simulation_data", "group_names", "connections", "from_stations"]:
@@ -723,31 +723,31 @@ class FactorySimulation:
         # Buffer capacities: specify capacity for stacker/WIP cart groups (to emulate finite buffer). If None, unlimited.
         self.buffer_capacities = buffer_capacities or {}
         # Initialize buffers with specified capacity or unlimited
+        # Identify special groups (Stacker or WIP Cart) that act as pure queues
+        self.special_groups = [g for g in station_groups if ("STACKER" in g.upper()) or ("WIP CART" in g.upper()) or ("WIPCART" in g.upper())]
+
+        # Initialize buffers with specified capacity or unlimited for all groups (special and normal)
         self.buffers = {}
         for group in station_groups:
             cap = None
             if group in self.buffer_capacities:
                 cap = self.buffer_capacities[group]
-            # Use unlimited capacity if no valid capacity provided
             if cap is None or cap <= 0:
                 self.buffers[group] = simpy.Store(env)
             else:
                 self.buffers[group] = simpy.Store(env, capacity=int(cap))
-        self.resources = {
-            eq: simpy.Resource(env, capacity=1)
-            for group in station_groups.values()
-            for eq in group
-        }
-        self.cycle_times = {
-            eq: ct
-            for group in station_groups.values()
-            for eq, ct in group.items()
-        }
-        self.equipment_to_group = {
-            eq: group
-            for group, eqs in station_groups.items()
-            for eq in eqs
-        }
+        # Create resources and mappings only for equipment belonging to non-special groups
+        self.resources = {}
+        self.cycle_times = {}
+        self.equipment_to_group = {}
+        for group, eqs in station_groups.items():
+            if group in self.special_groups:
+                # Skip creating equipment for special groups (pure queues)
+                continue
+            for eq, ct in eqs.items():
+                self.resources[eq] = simpy.Resource(env, capacity=1)
+                self.cycle_times[eq] = ct
+                self.equipment_to_group[eq] = group
 
         # Throughput and WIP tracking
         self.throughput_in = defaultdict(int)
@@ -769,7 +769,8 @@ class FactorySimulation:
         # If equipment-level parameters are provided, start individual failure processes per equipment
         if self.equipment_params:
             for eq, params in self.equipment_params.items():
-                if params and params[0] is not None and params[1] is not None:
+                # Only start failure processes for equipment that actually exists (non-special groups)
+                if eq in self.resources and params and params[0] is not None and params[1] is not None:
                     mtbf, mttr = params
                     self.env.process(self.equipment_failure_process(eq, mtbf, mttr))
         else:
@@ -803,6 +804,23 @@ class FactorySimulation:
             yield self.env.timeout(repair_time)
             # Zone goes back up: decrement the down counter
             self.zone_down_count[zone] = max(self.zone_down_count.get(zone, 1) - 1, 0)
+
+    def get_input_buffer(self, group):
+        """
+        Determine from which buffer a group should retrieve boards for processing. If the group
+        has exactly one upstream and that upstream is a special (queue) group, then boards should
+        be taken from the upstream group's buffer (i.e., the queue). Otherwise, boards are taken
+        from the group's own buffer.
+        """
+        # Identify upstream groups for this group from from_stations
+        upstreams = self.from_stations.get(group, []) if isinstance(self.from_stations, dict) else []
+        if len(upstreams) == 1:
+            upstream = upstreams[0]
+            # If upstream is a special group, use its buffer directly
+            if upstream in self.special_groups:
+                return self.buffers[upstream]
+        # Default: use this group's own buffer
+        return self.buffers[group]
 
     def equipment_failure_process(self, eq, mtbf, mttr):
         """
@@ -840,8 +858,9 @@ class FactorySimulation:
             # If zone is down (one or more failures in that zone), wait until it comes back up
             while self.zone_down_count.get(zone_name, 0) > 0:
                 yield self.env.timeout(1)
-            # Wait for a board to arrive
-            board = yield self.buffers[group].get()
+            # Wait for a board to arrive from the appropriate input buffer
+            input_buffer = self.get_input_buffer(group)
+            board = yield input_buffer.get()
             self.throughput_in[eq] += 1
             # Wait again if zone goes down before processing
             while self.zone_down_count.get(zone_name, 0) > 0:
@@ -878,6 +897,15 @@ class FactorySimulation:
         while True:
             snapshot = {}
             for group in self.station_groups:
+                # For special queue groups, WIP is the current number of items in the buffer
+                if group in getattr(self, 'special_groups', []):
+                    try:
+                        # simpy.Store has .items list
+                        snapshot[group] = len(self.buffers[group].items)
+                    except Exception:
+                        snapshot[group] = 0
+                    continue
+                # For normal processor groups, WIP is in_count - out_count
                 in_count = sum(self.throughput_in[eq] for eq in self.station_groups[group])
                 out_count = sum(self.throughput_out[eq] for eq in self.station_groups[group])
                 snapshot[group] = max(0, in_count - out_count)
